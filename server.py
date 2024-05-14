@@ -2,48 +2,67 @@ import socket
 import tqdm
 import os
 
-# device's IP address
+# Device's IP address and port
 SERVER_HOST = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 5050
-print(SERVER_HOST)
-# create the server socket TCP socket
-server= socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-# bind the socket to our local address
+# Create the server TCP socket
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+# Bind the socket to our local address
 server.bind((SERVER_HOST, SERVER_PORT))
 
-# enabling our server to accept connections
-# 5 here is the number of unaccepted connections that
-# the system will allow before refusing new connections
+# Put server in listening mode
 server.listen()
 
-# accept connection if there is any
-client, address = server.accept() 
+print(f"[*] Listening as {SERVER_HOST}:{SERVER_PORT}")
 
-file_name = client.recv(1024).decode()
-print(file_name)
-file_size = client.recv(1024).decode()
-print(file_size)
+# Accept connections from clients
+client_socket, client_address = server.accept()
 
-file = open(file_name, 'wb')
+# Define protocol
+response = client_socket.recv(1024).decode()
 
-file_bytes = b""
+if response == "READY":
+    # Send image to client
 
-done = False
+    file_name = "spongebob.jpg"
+    file_size = os.path.getsize(file_name)
 
-progress = tqdm.tqdm(unit="B", unit_scale=True, unit_divisor=1000, total=int(file_size))
+    # Send file name and size
+    client_socket.send(f"{file_name}\n{file_size}".encode())
 
-while not done:
-    data = client.recv(1024)
-    if file_bytes[-5:] == b"<END>":
-        done = True
-    else:
-        file_bytes += data
+    # Send file data in chunks
+    with open(file_name, "rb") as file:
+        while True:
+            data = file.read(1024)
+            if not data:
+                break
+            client_socket.sendall(data)
 
-    progress.update(1024)
+    print("[+] Image sent successfully.")
 
-file.write(file_bytes)
+# Receive "DONE" command
+done_command = client_socket.recv(1024).decode()
+if done_command == "DONE":
+    print("[*] Client has sent DONE command.")
 
-file.close()
-client.close()
+    # Receive image from client
+    file_name, file_size = client_socket.recv(1024).decode().split('\n')
+    file_size = int(file_size)
+
+    with open('receivedImageFromClient.jpg', "wb") as file:
+        progress = tqdm.tqdm(range(file_size), f"Receiving {file_name}", unit="B", unit_scale=True)
+        received_bytes = 0
+        while received_bytes < file_size:
+            data = client_socket.recv(1024)
+            file.write(data)
+            received_bytes += len(data)
+            progress.update(len(data))
+        progress.close()
+
+    print("[+] Image received and saved successfully.")
+
+# Close the connection
+client_socket.close()
 server.close()
