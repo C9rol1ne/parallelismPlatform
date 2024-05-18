@@ -51,6 +51,17 @@ with open(file_name, "rb") as file:
 
 print("[+] Image sent to server successfully.")
 
-# Close the connection
-client_socket.close()
+# Close the connection given server response
+server_response = client_socket.recv(1024).decode()
+print(f'SERVER RESPONSE: {server_response}')
+if server_response == "STAY":
+    print("[+] Server asks client to stay")
+    # Add code for further communication with the server (optional)
+else:
+    print("[+] Client killed by server")
+    client_socket.close()
+
+
+
+
 
