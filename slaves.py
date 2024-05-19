@@ -1,6 +1,7 @@
-import socket
-import tqdm
-import os
+import socket # For TCP communication
+import tqdm # Progress bars
+import os   
+import cv2 # Lib for image processing
 
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 SERVER_HOST = socket.gethostbyname(socket.gethostname())
@@ -31,11 +32,17 @@ print("[+] Image received successfully.")
 
 # Send "DONE" command
 client_socket.send("DONE".encode())
-
 print("[*] Sent DONE command to server.")
 
+# Process image
+image = cv2.imread("receivedImageFromServer.jpg",cv2.IMREAD_COLOR)
+image = cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+edges = cv2.Canny(image,100,200)
+processed_file_path = "processedImage.jpg"
+cv2.imwrite(processed_file_path, edges)
+
 # Send image to server
-file_name = "lievitoMadre.jpg"
+file_name = processed_file_path
 file_size = os.path.getsize(file_name)
 
 # Send file name and size
@@ -51,7 +58,7 @@ with open(file_name, "rb") as file:
 
 print("[+] Image sent to server successfully.")
 
-# Close the connection given server response
+# Close the connection given server response.
 server_response = client_socket.recv(1024).decode()
 print(f'SERVER RESPONSE: {server_response}')
 if server_response == "STAY":
