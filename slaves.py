@@ -4,7 +4,7 @@ import os
 import cv2 # Lib for image processing
 
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-SERVER_HOST = "127.0.1.1" # socket.gethostbyname(socket.gethostname())
+SERVER_HOST = "192.168.1.29" # socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 5051
 
 # Connect to the server
@@ -25,7 +25,7 @@ with open(file_name, "wb") as file:
     received_bytes = 0
     while received_bytes < file_size:
         data = client_socket.recv(1024)
-        print("data :", data)
+        #print("data :", data)
         file.write(data)
         received_bytes += len(data)
         progress.update(len(data))

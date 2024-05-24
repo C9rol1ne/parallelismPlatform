@@ -66,11 +66,11 @@ class Master:
 
                 with open(filename, "rb") as file:
                     while True:
-                        data = file.read()
+                        data = file.read() # Read 1024 bytes
                         if not data:
                             break
 
-                        print("chunk here", data)
+                        #print("chunk here", data)
                         print("len of chunk", len(data))
 
                         index += 1
@@ -158,7 +158,9 @@ class Master:
 
     def enqueue_tasks(self, tasks):
         self.tasks_mutex.acquire()
-        self.tasks += tasks
+        for task in tasks:
+            self.tasks.append(task)
+            print(f"New task enqueued: {task.filename}, index: {task.order}")
         self.tasks_mutex.release()
 
     def dequeue_file(self):
@@ -263,7 +265,7 @@ class Slave:
         try:
             file_size = len(task.payload)
             print(file_size)
-            print(task.payload)
+            #print(task.payload)
             self.client_socket.send(f"{file_size}".encode())
 
             self.client_socket.send(task.payload)
