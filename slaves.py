@@ -4,8 +4,8 @@ import os
 import cv2 # Lib for image processing
 
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-SERVER_HOST = socket.gethostbyname(socket.gethostname())
-SERVER_PORT = 5050
+SERVER_HOST = "127.0.1.1" # socket.gethostbyname(socket.gethostname())
+SERVER_PORT = 5051
 
 # Connect to the server
 client_socket.connect((SERVER_HOST, SERVER_PORT))
@@ -14,15 +14,18 @@ client_socket.connect((SERVER_HOST, SERVER_PORT))
 client_socket.send("READY".encode())
 
 # Receive file name and size
-file_info = client_socket.recv(1024).decode().split('\n')
-file_name, file_size = file_info[0], int(file_info[1])
+size = client_socket.recv(32)
+file_size = int(size.decode())
+print("file size is:", file_size)
+file_name = "DUMMY.jpg"
 
 # Receive file data
-with open("receivedImageFromServer.jpg", "wb") as file:
+with open(file_name, "wb") as file:
     progress = tqdm.tqdm(range(file_size), f"Receiving {file_name}", unit="B", unit_scale=True)
     received_bytes = 0
     while received_bytes < file_size:
         data = client_socket.recv(1024)
+        print("data :", data)
         file.write(data)
         received_bytes += len(data)
         progress.update(len(data))
@@ -35,7 +38,7 @@ client_socket.send("DONE".encode())
 print("[*] Sent DONE command to server.")
 
 # Process image
-image = cv2.imread("receivedImageFromServer.jpg",cv2.IMREAD_COLOR)
+image = cv2.imread(file_name,cv2.IMREAD_COLOR)
 image = cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
 edges = cv2.Canny(image,100,200)
 processed_file_path = "processedImage.jpg"
