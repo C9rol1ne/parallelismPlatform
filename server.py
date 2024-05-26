@@ -108,7 +108,7 @@ class Master:
 
                 with open(filename, "rb") as file:
                     while True:
-                        data = file.read()
+                        data = file.read() # Read 1024 bytes
                         if not data:
                             break
 
@@ -200,7 +200,9 @@ class Master:
 
     def enqueue_tasks(self, tasks):
         self.tasks_mutex.acquire()
-        self.tasks += tasks
+        for task in tasks:
+            self.tasks.append(task)
+            print(f"New task enqueued: {task.filename}, index: {task.order}")
         self.tasks_mutex.release()
 
     def dequeue_file(self):
