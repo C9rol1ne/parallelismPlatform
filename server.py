@@ -1,5 +1,6 @@
 import socket
 import tqdm
+import select
 import os
 from threading import Thread
 from threading import Lock
@@ -8,14 +9,11 @@ import time
 import uuid
 from PIL import Image
 
-
 # List of statuses
 BUSY = "busy"
 IDLE = "idle"
 AWAITING_FOR_TASK = "awaiting_for_task"
 DEAD = "dead"
-
-
 
 class Channel:
     def __init__(self):
@@ -77,6 +75,22 @@ class Master:
         # Thread: Re-enqueue failed tasks by giving the slaves a steam so the submit the failed tasks
         Thread(target=self.receive_done_tasks, args=()).start()
 
+    def join_done_tasks(self, tasks):
+        if len(tasks) == 0:
+            return
+
+        sorted_tasks = sorted(tasks, key=lambda task: task.order)
+
+        combined_payload = b"".join(
+            task.payload.encode('utf-8') if isinstance(task.payload, str) else task.payload
+            for task in sorted_tasks
+        )
+
+        with open("final_" + tasks[0].filename, "wb") as file:
+            file.write(combined_payload)
+
+        print(f"{tasks[0].filename} created successfully.")
+
     def receive_user_input(self):
         while True:
             filename = input('Please enter the file name: \n').strip()
@@ -93,14 +107,10 @@ class Master:
             # TODO: CAROLINA prevent reseting the progress
             self.tasks_by_filename[filename] = []
 
-    def do_task(self, slave, data, filename, index):
-        task = Task(slave.id, data, filename, index)
-        slave.set_task(task)
-
     def split_image(self, image_path, output_folder, num_cols, num_rows):
         try:
             with Image.open(image_path) as img:
-                
+
                 width, height = img.size
 
                 col_width = width // num_cols
@@ -142,13 +152,11 @@ class Master:
                 continue
 
             try:
-
                 sub_images_folder = "sub_images" # generalize
                 self.split_image(filename, sub_images_folder, num_cols=3, num_rows=3)
 
                 index = 0
                 tasks = []
-
 
                 for root, dirs, files in os.walk(sub_images_folder):
                     for file in files:
@@ -184,7 +192,7 @@ class Master:
                     idle_slave.assign_task(task)
 
                     break
-                
+
         except:
             print("could not dequeue task")
         finally:
@@ -233,7 +241,7 @@ class Master:
         task = None
         if len(self.tasks) > 0:
             task = self.tasks.pop(0)
-            
+
         self.tasks_mutex.release()
 
         return task
@@ -251,16 +259,16 @@ class Master:
         file = None
         if len(self.files) > 0:
             file = self.files.pop(-1)
-            
+
         self.files_mutex.release()
 
         return file
-    
+
     def enqueue_file(self, file):
         self.files_mutex.acquire()
 
         self.files.append(file)
-            
+
         self.files_mutex.release()
 
     def slaves_len(self):
@@ -307,13 +315,18 @@ class Master:
         
             self.tasks_by_filename_mutex.acquire()
             try:
-                self.tasks_by_filename[done_task.filename].append(done_task)
+                current_tasks = self.tasks_by_filename[done_task.filename]
+                current_tasks.append(done_task)
+
+                if len(current_tasks) == 9:
+                    self.join_done_tasks(self.tasks_by_filename.pop(done_task.filename))
+
                 print(f'Tasks for filename{done_task.filename} added to thedictionary: {done_task}')
-                
+
             finally:
                 self.tasks_by_filename_mutex.release()
 
-            print(f"task dequeued {done_task.filename}")
+            print(f"task dequeued {done_task.filename} {done_task.order}")
             
 
 class Slave:
@@ -341,7 +354,7 @@ class Slave:
         try:
             while True:
                 # TODO: if the receive fails it will get stuck forever
-                response = self.client_socket.recv(1024).decode()
+                response = receive_content_by_length(self.client_socket)
                 if self.is_invalid_response(response):
                     self.flush_connection()
                     continue
@@ -356,15 +369,18 @@ class Slave:
                     print(f"Client {self.client_address}:{self.client_socket} has sent DONE command.")
                     self.receive_file()
                 
-                server_response = "STAY"
+                    send_content_with_length(self.client_socket, "STAY")
 
-                self.client_socket.send(server_response.encode())
+                    self.set_status(IDLE)
+                    self.set_task(None)
+                    self.file_handshake_established = False
 
-                self.set_status(IDLE)
-                self.set_task(None)
+                    continue
 
-        except:
-            print(f"client {self.client_address}:{self.client_socket} timeout")
+                self.flush_connection()
+
+        except Exception as e:
+            print(f"client {self.client_socket} failed: {e}")
         finally:
             self.set_status(DEAD)
             self.client_socket.close()
@@ -384,29 +400,20 @@ class Slave:
 
     def send_file(self, task):
         try:
-            file_size = len(task.payload)
-
-            file_size_bytes = file_size.to_bytes(4, byteorder='big')
-            print(file_size)
-            print(file_size_bytes)
-
-            self.client_socket.send(file_size_bytes)
-
-            self.client_socket.send(task.payload)
+            send_content_with_length(self.client_socket, task.filename)
+            send_content_with_length(self.client_socket, task.payload)
             
             print("[+] Image sent successfully.")
         except socket.error:
             print(f"slave send file, error: {socket.error}")
-        except:
-            print(f"slave send file: {task.filename} failed")
+        except Exception as e:
+            print(f"slave send file: {task.filename} failed: {e}")
 
     def assign_task(self, task):
         self.set_status(BUSY)
         self.set_task(task)
 
     def set_task(self, task):
-        self.set_status(BUSY)
-
         self.task_mutex.acquire()
         self.task = task
         self.task_mutex.release()
@@ -435,13 +442,8 @@ class Slave:
         self.status_mutex.release()
 
     def receive_file(self):
-
-        size_bytes = self.client_socket.recv(4)
-        file_size = int.from_bytes(size_bytes, byteorder='big')
-
-        data = self.client_socket.recv(file_size)
+        data = receive_content_by_length(self.client_socket)
         self.set_task_data(data)
-        
         self.submit_task()
     
         print("[+] Image received and saved successfully.")
@@ -467,6 +469,33 @@ def is_valid_filename(filename):
 
     return True
 
+def send_content_with_length(socket, data):
+    if isinstance(data, str):
+        data = data.encode()
+
+    data_size = len(data)
+    data_size_bytes = data_size.to_bytes(4, byteorder='big')
+    socket.sendall(data_size_bytes)
+    socket.sendall(data)
+
+def receive_content_by_length(socket):
+    content_length_bytes = socket.recv(4)
+    if len(content_length_bytes) < 4:
+        raise ValueError("Failed to read the complete content length.")
+    
+    content_length = int.from_bytes(content_length_bytes, byteorder='big')
+
+    received_data = bytearray()
+    while len(received_data) < content_length:
+        packet = socket.recv(content_length - len(received_data))
+        if not packet:
+            raise ValueError("Connection closed before receiving all data.")
+        received_data.extend(packet)
+
+    return received_data.decode('utf-8')
+
+
+
 def main(server):
     done_tasks_channel = Channel()
     master = Master(done_tasks_channel)
@@ -484,15 +513,14 @@ def main(server):
         except Exception as e:
             print(f"[-] Error: {e}")
 
-
 if __name__ == '__main__':
     # Device's IP address and port
     SERVER_HOST = socket.gethostbyname(socket.gethostname())
-    SERVER_PORT = 5050
+    SERVER_PORT = 5051
 
     # Create the server TCP socket
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
+    
     # Bind the socket to our local address
     server.bind((SERVER_HOST, SERVER_PORT))
 
@@ -502,3 +530,4 @@ if __name__ == '__main__':
 
     main(server)
     server.close()
+    server.shutdown()
