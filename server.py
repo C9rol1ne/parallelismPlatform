@@ -15,9 +15,44 @@ DEAD = "dead"
 
 
 
+class Channel:
+    def __init__(self):
+        self.buffer = []
+        self.mutex = Lock()
+
+    def enqueue(self, element):
+        if element is None:
+            raise ValueError('cannot enqueue None values')
+
+        self.mutex.acquire()
+        self.buffer.append(element)
+        self.mutex.release()
+
+    def dequeue(self):
+        self.mutex.acquire()
+        out = None
+
+        try:
+            if len(self.buffer) == 0:
+                raise Exception('cannot dequeue from empty buffer')
+
+            out = self.buffer.pop(0)
+        except Exception as e:
+            pass
+        finally:
+            self.mutex.release()
+            return out
+
+    def length(self):
+        self.mutex.acquire()
+        length = len(self.buffer)
+        self.mutex.release()
+
+        return length
+
 class Master:
 
-    def __init__(self) -> None:
+    def __init__(self, done_task_channel) -> None:
         self.slaves = []
         self.slaves_mutex = Lock()
 
@@ -29,11 +64,15 @@ class Master:
 
         self.pending_tasks = []
 
+        self.tasks_by_filename = {}
+
+        self.done_task_channel = done_task_channel
+
         Thread(target=self.receive_user_input, args=()).start()
         Thread(target=self.create_tasks_from_file, args=()).start()
         Thread(target=self.dequeue_tasks, args=()).start()
-        # Thread: Renqueue failed tasks by giving the slaves a steam so the submit the failed tasks
-        # Thread: Create stream so slaves submit succesful tasks
+        # Thread: Re-enqueue failed tasks by giving the slaves a steam so the submit the failed tasks
+        Thread(target=self.receive_done_tasks, args=()).start()
 
     def receive_user_input(self):
         while True:
@@ -47,6 +86,9 @@ class Master:
             print(f'The provided file name is: {filename}')
 
             self.enqueue_file(filename)
+
+            # TODO: CAROLINA prevent reseting the progress
+            self.tasks_by_filename[filename] = []
 
     def do_task(self, slave, data, filename, index):
         task = Task(slave.id, data, filename, index)
@@ -70,11 +112,11 @@ class Master:
                         if not data:
                             break
 
-                        print("chunk here", data)
+                        #print("chunk here", data)
                         print("len of chunk", len(data))
 
-                        index += 1
                         tasks.append(Task("", data, filename, index))
+                        index += 1
 
                 self.enqueue_tasks(tasks)
 
@@ -99,7 +141,7 @@ class Master:
 
                         continue
 
-                    idle_slave.set_task(task)
+                    idle_slave.assign_task(task)
 
                     break
                 
@@ -150,7 +192,7 @@ class Master:
 
         task = None
         if len(self.tasks) > 0:
-            task = self.tasks.pop(-1)
+            task = self.tasks.pop(0)
             
         self.tasks_mutex.release()
 
@@ -213,8 +255,18 @@ class Master:
 
             return idle_slave
 
+    def receive_done_tasks(self):
+        while True:
+            done_task = self.done_task_channel.dequeue()
+            if done_task is None:
+                time.sleep(0.25)
+                continue
+
+            print(f"task dequeued {done_task.filename}")
+            
+
 class Slave:
-    def __init__(self, client_socket, client_address) -> None:
+    def __init__(self, client_socket, client_address, submit_channel) -> None:
         self.status = IDLE
         self.status_mutex = Lock()
 
@@ -225,6 +277,13 @@ class Slave:
         self.client_socket = client_socket
         self.client_address = client_address
 
+        self.submit_channel = submit_channel
+
+        self.file_handshake_established = False
+
+    def is_invalid_response(self, response):
+        return response == "READY" and self.file_handshake_established or response == "DONE" and not self.file_handshake_established
+
     def handle_client(self):
         print(f"[+] {self.client_address} connected.")
 
@@ -232,39 +291,55 @@ class Slave:
             while True:
                 # TODO: if the receive fails it will get stuck forever
                 response = self.client_socket.recv(1024).decode()
+                if self.is_invalid_response(response):
+                    self.flush_connection()
+                    continue
+
                 if response == "READY":
-                    while True:
-                        if self.get_task() is None:
-                            time.sleep(0.25)
-                            continue
+                    self.file_handshake_established = True
+                    self.handle_send_task()
 
-                        break
+                    continue
 
-                    self.send_file(self.get_task())
-                
-                done_command = self.client_socket.recv(1024).decode()
-                if done_command == "DONE":
-                    print("[*] Client has sent DONE command.")
-
+                if response == "DONE":
+                    print(f"Client {self.client_address}:{self.client_socket} has sent DONE command.")
                     self.receive_file()
-
+                
                 server_response = "STAY"
 
-                self.client_socket.sendall(server_response.encode())
-                if server_response != "STAY":
-                    break
+                self.client_socket.send(server_response.encode())
+
+                self.set_status(IDLE)
+                self.set_task(None)
+
         except:
             print(f"client {self.client_address}:{self.client_socket} timeout")
         finally:
             self.set_status(DEAD)
             self.client_socket.close()
 
+    def handle_send_task(self):
+        while True:
+            if self.get_task() is None:
+                time.sleep(0.25)
+                continue
+
+            break
+
+        self.send_file(self.get_task())
+
+    def flush_connection(self):
+        self.file_handshake_established = False
+
     def send_file(self, task):
         try:
             file_size = len(task.payload)
+
+            file_size_bytes = file_size.to_bytes(4, byteorder='big')
             print(file_size)
-            print(task.payload)
-            self.client_socket.send(f"{file_size}".encode())
+            print(file_size_bytes)
+
+            self.client_socket.send(file_size_bytes)
 
             self.client_socket.send(task.payload)
             
@@ -274,11 +349,20 @@ class Slave:
         except:
             print(f"slave send file: {task.filename} failed")
 
+    def assign_task(self, task):
+        self.set_status(BUSY)
+        self.set_task(task)
+
     def set_task(self, task):
         self.set_status(BUSY)
 
         self.task_mutex.acquire()
         self.task = task
+        self.task_mutex.release()
+
+    def set_task_data(self, payload):
+        self.task_mutex.acquire()
+        self.task.payload = payload
         self.task_mutex.release()
 
     def get_task(self):
@@ -300,24 +384,19 @@ class Slave:
         self.status_mutex.release()
 
     def receive_file(self):
-        file_info = self.client_socket.recv(1024).decode()
-        filename, file_size = file_info.split('\n')
-        file_size = int(file_size)
 
-        with open('receivedImageFromClient.jpg', "wb") as file:
-            progress = tqdm.tqdm(range(file_size), f"Receiving {filename}", unit="B", unit_scale=True, unit_divisor=1024)
-            received_bytes = 0
-            while received_bytes < file_size:
-                data = self.client_socket.recv(1024)
-                if not data:
-                    break
-                file.write(data)
-                received_bytes += len(data)
-                progress.update(len(data))
-            progress.close()
+        size_bytes = self.client_socket.recv(4)
+        file_size = int.from_bytes(size_bytes, byteorder='big')
+
+        data = self.client_socket.recv(file_size)
+        self.set_task_data(data)
         
+        self.submit_task()
+    
         print("[+] Image received and saved successfully.")
 
+    def submit_task(self):
+        self.submit_channel.enqueue(self.get_task())
 
 class Task:
 
@@ -338,13 +417,14 @@ def is_valid_filename(filename):
     return True
 
 def main(server):
-    master = Master()
+    done_tasks_channel = Channel()
+    master = Master(done_tasks_channel)
 
     while True:
         try:
             # Accept connections from clients
             client_socket, client_address = server.accept()
-            slave = Slave(client_socket, client_address)
+            slave = Slave(client_socket, client_address, done_tasks_channel)
             master.add_slave(slave)
             
             # Create a new thread for each client
@@ -357,7 +437,7 @@ def main(server):
 if __name__ == '__main__':
     # Device's IP address and port
     SERVER_HOST = socket.gethostbyname(socket.gethostname())
-    SERVER_PORT = 5051
+    SERVER_PORT = 5050
 
     # Create the server TCP socket
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
