@@ -13,22 +13,25 @@ client_socket.connect((SERVER_HOST, SERVER_PORT))
 # Send "READY" command
 client_socket.send("READY".encode())
 
+socket_index = 1
+socket_address = client_socket.getsockname()[socket_index]
+
+print(f"Socket address: {socket_address}")
+
 # Receive file name and size
-size = client_socket.recv(32)
-file_size = int(size.decode())
+size_bytes = client_socket.recv(4)
+file_size = int.from_bytes(size_bytes, byteorder='big')
 print("file size is:", file_size)
-file_name = "DUMMY.jpg"
+
+input_file_name = f"recv{socket_address}.jpg"
 
 # Receive file data
-with open(file_name, "wb") as file:
-    progress = tqdm.tqdm(range(file_size), f"Receiving {file_name}", unit="B", unit_scale=True)
+with open(input_file_name, "wb") as file:
     received_bytes = 0
     while received_bytes < file_size:
         data = client_socket.recv(1024)
         file.write(data)
         received_bytes += len(data)
-        progress.update(len(data))
-    progress.close()
 
 print("[+] Image received successfully.")
 
@@ -76,8 +79,3 @@ if server_response == "STAY":
 else:
     print("[+] Client killed by server")
     client_socket.close()
-
-
-
-
-
