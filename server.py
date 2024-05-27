@@ -79,15 +79,23 @@ class Master:
         if len(tasks) == 0:
             return
 
-        sorted_tasks = sorted(tasks, key=lambda task: task.order)
+        images = [Image.open(task.file_path) for task in tasks]
 
-        combined_payload = b"".join(
-            task.payload.encode('utf-8') if isinstance(task.payload, str) else task.payload
-            for task in sorted_tasks
-        )
+        width, height = images[0].size
+        num_images = len(images)
+        num_columns = 3
+        num_rows = (num_images + num_columns - 1) // num_columns
 
-        with open("final_" + tasks[0].filename, "wb") as file:
-            file.write(combined_payload)
+        merged_image = Image.new('RGB', (width * num_columns, height * num_rows))
+
+        for idx, img in enumerate(images):
+            row = idx // num_columns
+            col = idx % num_columns
+            x_offset = col * width
+            y_offset = row * height
+            merged_image.paste(img, (x_offset, y_offset))
+
+        merged_image.save("final_" + tasks[0].filename)
 
         print(f"{tasks[0].filename} created successfully.")
 
@@ -322,7 +330,8 @@ class Master:
                     self.join_done_tasks(self.tasks_by_filename.pop(done_task.filename))
 
                 print(f'Tasks for filename{done_task.filename} added to thedictionary: {done_task}')
-
+            except Exception as e:
+                print(f"receive done tasks: {e}")
             finally:
                 self.tasks_by_filename_mutex.release()
 
@@ -418,11 +427,6 @@ class Slave:
         self.task = task
         self.task_mutex.release()
 
-    def set_task_data(self, payload):
-        self.task_mutex.acquire()
-        self.task.payload = payload
-        self.task_mutex.release()
-
     def get_task(self):
         self.task_mutex.acquire()
         task = self.task
@@ -442,10 +446,14 @@ class Slave:
         self.status_mutex.release()
 
     def receive_file(self):
-        data = receive_content_by_length(self.client_socket)
-        self.set_task_data(data)
+        data = receive_file_by_length(self.client_socket)
+        
+        self.task.set(payload=data, file_path = str(self.task.order) + "_" + self.task.filename)
+
+        with open(self.task.file_path, "wb") as file:
+            file.write(self.task.payload)
+
         self.submit_task()
-    
         print("[+] Image received and saved successfully.")
 
     def submit_task(self):
@@ -457,7 +465,29 @@ class Task:
         self.owner = owner
         self.payload = payload
         self.filename = filename
+        self.file_path = ""
         self.order = index
+        self.mutex = Lock()
+    
+    def set(self, owner= None, payload= None, filename= None, file_path= None, order= None):
+        self.mutex.acquire()
+        
+        if owner != None:
+           self.owner = owner 
+        
+        if payload != None:
+           self.payload = payload 
+        
+        if filename != None:
+           self.filename = filename 
+        
+        if file_path != None:
+           self.file_path = file_path 
+        
+        if order != None:
+           self.order = order
+
+        self.mutex.release()
 
 def is_valid_filename(filename):
     # Ensure the filename is not empty and does not contain path traversal characters
@@ -479,12 +509,14 @@ def send_content_with_length(socket, data):
     socket.sendall(data)
 
 def receive_content_by_length(socket):
+    # Read exactly 4 bytes to get the length
     content_length_bytes = socket.recv(4)
     if len(content_length_bytes) < 4:
         raise ValueError("Failed to read the complete content length.")
     
     content_length = int.from_bytes(content_length_bytes, byteorder='big')
 
+    # Read the content based on the received length
     received_data = bytearray()
     while len(received_data) < content_length:
         packet = socket.recv(content_length - len(received_data))
@@ -492,9 +524,24 @@ def receive_content_by_length(socket):
             raise ValueError("Connection closed before receiving all data.")
         received_data.extend(packet)
 
-    return received_data.decode('utf-8')
+    return received_data.decode()
 
+def receive_file_by_length(socket):
+    # Read exactly 4 bytes to get the length
+    content_length_bytes = socket.recv(4)
+    if len(content_length_bytes) < 4:
+        raise ValueError("Failed to read the complete content length.")
+    
+    content_length = int.from_bytes(content_length_bytes, byteorder='big')
 
+    received_bytes = 0
+    content = b""
+    while received_bytes < content_length:
+        data = socket.recv(content_length - received_bytes)
+        received_bytes += len(data)
+        content += data
+
+    return content
 
 def main(server):
     done_tasks_channel = Channel()
@@ -516,7 +563,7 @@ def main(server):
 if __name__ == '__main__':
     # Device's IP address and port
     SERVER_HOST = socket.gethostbyname(socket.gethostname())
-    SERVER_PORT = 5051
+    SERVER_PORT = 50564
 
     # Create the server TCP socket
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

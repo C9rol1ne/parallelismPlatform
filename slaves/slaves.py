@@ -84,7 +84,7 @@ def run(client_socket):
             with open(input_file_name, "rb") as file:
                 content = file.read()
 
-            send_content_with_length(client_socket, str(content))
+            send_content_with_length(client_socket, content)
 
             print("[+] Image sent to server successfully.")
 
@@ -104,7 +104,7 @@ def run(client_socket):
 if __name__ == '__main__':
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     SERVER_HOST = "127.0.1.1" # socket.gethostbyname(socket.gethostname())
-    SERVER_PORT = 5051
+    SERVER_PORT = 50564
 
     # Connect to the server
     client_socket.connect((SERVER_HOST, SERVER_PORT))
