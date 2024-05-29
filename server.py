@@ -131,6 +131,7 @@ class Master:
     
     
 
+
     def receive_user_input(self):
         while True:
             user_input = input('Please enter the file name and the value of n (e.g., image.jpg 4): \n').strip()
@@ -140,8 +141,13 @@ class Master:
                 continue
 
             filename, n_str = parts
+            
             if not is_valid_filename(filename):
                 print('Invalid file name. Please avoid using path traversal characters or empty names.')
+                continue
+
+            if any(char.isdigit() for char in filename):
+                print('Invalid file name. Please enter a filename without numbers.')
                 continue
 
             try:
@@ -165,6 +171,7 @@ class Master:
             # Enqueue the modified filename
             self.enqueue_file(new_filename)
             self.tasks_by_filename[new_filename] = []
+
 
 
     def split_image(self, image_path, output_folder, num_cols, num_rows):
