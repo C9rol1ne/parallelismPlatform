@@ -8,6 +8,7 @@ from threading import Lock
 import time
 import uuid
 from PIL import Image
+import re
 
 # List of statuses
 BUSY = "busy"
@@ -128,21 +129,43 @@ class Master:
         print(f"Merged image saved as {merged_image_path}")
 
     
+    
+
     def receive_user_input(self):
         while True:
-            filename = input('Please enter the file name: \n').strip()
+            user_input = input('Please enter the file name and the value of n (e.g., image.jpg 4): \n').strip()
+            parts = user_input.split()
+            if len(parts) != 2:
+                print("Invalid input. Please enter both a file name and a value for n.")
+                continue
 
+            filename, n_str = parts
             if not is_valid_filename(filename):
                 print('Invalid file name. Please avoid using path traversal characters or empty names.')
                 continue
 
-            # TODO: check if the file exists!
-            print(f'The provided file name is: {filename}')
+            try:
+                n = int(n_str)
+                if n <= 1:
+                    raise ValueError()
+            except ValueError:
+                print("Invalid value for n. Please enter an integer greater than 1.")
+                continue
 
-            self.enqueue_file(filename)
+            # Inserting 'n' before the file extension
+            name_parts = os.path.splitext(filename)
+            new_filename = f"{name_parts[0]}{n}{name_parts[1]}"
 
-            # TODO: CAROLINA prevent reseting the progress
-            self.tasks_by_filename[filename] = []
+            print(f'The provided file name is: {filename} with n = {n}')
+            print(f'Modified file name is: {new_filename}')
+
+            # Change the original filename to the modified one
+            os.rename(filename, new_filename)
+
+            # Enqueue the modified filename
+            self.enqueue_file(new_filename)
+            self.tasks_by_filename[new_filename] = []
+
 
     def split_image(self, image_path, output_folder, num_cols, num_rows):
         try:
@@ -185,12 +208,15 @@ class Master:
             filename = self.dequeue_file()
             if filename is None:
                 time.sleep(0.25)
-
                 continue
 
             try:
                 sub_images_folder = "sub_images" # generalize
-                self.split_image(filename, sub_images_folder, num_cols=4, num_rows=4)
+                pattern = '(\d+)(?=\.)'
+                match = re.search(pattern, filename)
+                n = int(match.group())
+               
+                self.split_image(filename, sub_images_folder, num_cols=n, num_rows=n)
 
                 index = 0
                 tasks = []
@@ -205,11 +231,11 @@ class Master:
 
                 self.enqueue_tasks(tasks)
 
-            except:
-                print(f"could not enqueue {filename} tasks, please input the file again!")
-            finally:
-                pass
+            except Exception as e:
+                print(f"Error creating tasks from file {filename}: {e}")
 
+
+    
     def dequeue_tasks(self):
         try:
             while True:
@@ -355,7 +381,12 @@ class Master:
                 current_tasks = self.tasks_by_filename[done_task.filename]
                 current_tasks.append(done_task)
 
-                if len(current_tasks) == 16:
+                # retrieve n from filename
+                pattern = '(\d+)(?=\.)'
+                match = re.search(pattern, done_task.filename)
+                n = int(match.group())
+                
+                if len(current_tasks) == n*n:
                     self.join_done_tasks(self.tasks_by_filename.pop(done_task.filename))
 
                 print(f'Tasks for filename{done_task.filename} added to thedictionary: {done_task}')
