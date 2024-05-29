@@ -103,7 +103,7 @@ def run(client_socket):
 
 if __name__ == '__main__':
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    SERVER_HOST = "127.0.1.1" # socket.gethostbyname(socket.gethostname())
+    SERVER_HOST = "192.168.1.29" # socket.gethostbyname(socket.gethostname())
     SERVER_PORT = 50564
 
     # Connect to the server

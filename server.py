@@ -77,28 +77,57 @@ class Master:
 
     def join_done_tasks(self, tasks):
         if len(tasks) == 0:
+            print("No tasks to join.")
             return
 
-        images = [Image.open(task.file_path) for task in tasks]
+        # Sort tasks by their order to ensure they are merged in the correct order
+        tasks.sort(key=lambda x: x.order)
 
-        width, height = images[0].size
+        # Load images and ensure all images are loaded correctly
+        images = []
+        for task in tasks:
+            try:
+                img = Image.open(task.file_path).convert('RGB')
+                images.append(img)
+            except Exception as e:
+                print(f"Error loading image {task.file_path}: {e}")
+                return  # If any image fails to load, return early
+
+        # Determine grid size based on the number of tasks 
         num_images = len(images)
-        num_columns = 3
-        num_rows = (num_images + num_columns - 1) // num_columns
+        print(f'num_images: {num_images}')
+        grid_size = int(num_images**0.5)
+        if grid_size**2 < num_images:
+            grid_size += 1
 
-        merged_image = Image.new('RGB', (width * num_columns, height * num_rows))
+        print(f"Number of images: {num_images}, Grid size: {grid_size}")
 
-        for idx, img in enumerate(images):
-            row = idx // num_columns
-            col = idx % num_columns
-            x_offset = col * width
-            y_offset = row * height
-            merged_image.paste(img, (x_offset, y_offset))
+        # Get size of each sub-image
+        width, height = images[0].size
+        print(f"Sub-image size: {width}x{height}")
 
-        merged_image.save("final_" + tasks[0].filename)
+        # Calculate total size of the merged image
+        total_width = width * grid_size
+        total_height = height * grid_size
+        print(f"Total merged image size: {total_width}x{total_height}")
 
-        print(f"{tasks[0].filename} created successfully.")
+        # Create a new blank image with RGB mode
+        merged_image = Image.new('RGB', (total_width, total_height))
 
+        # Paste each image in the correct location
+        for i, img in enumerate(images):
+            row = i // grid_size
+            col = i % grid_size
+            position = (col * width, row * height)
+            print(f"Pasting image {i} at position {position}")
+            merged_image.paste(img, position)
+
+        # Save the merged image with a unique filename
+        merged_image_path = f'merged_image_{int(time.time())}.jpg'
+        merged_image.save(merged_image_path)
+        print(f"Merged image saved as {merged_image_path}")
+
+    
     def receive_user_input(self):
         while True:
             filename = input('Please enter the file name: \n').strip()
@@ -161,7 +190,7 @@ class Master:
 
             try:
                 sub_images_folder = "sub_images" # generalize
-                self.split_image(filename, sub_images_folder, num_cols=3, num_rows=3)
+                self.split_image(filename, sub_images_folder, num_cols=4, num_rows=4)
 
                 index = 0
                 tasks = []
@@ -326,7 +355,7 @@ class Master:
                 current_tasks = self.tasks_by_filename[done_task.filename]
                 current_tasks.append(done_task)
 
-                if len(current_tasks) == 9:
+                if len(current_tasks) == 16:
                     self.join_done_tasks(self.tasks_by_filename.pop(done_task.filename))
 
                 print(f'Tasks for filename{done_task.filename} added to thedictionary: {done_task}')
